@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { endianness } from "node:os";
 import { fileURLToPath } from 'node:url';
 import { dirname, join, parse } from 'node:path';
@@ -14,7 +15,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const TAG = "v0.3.2";
 
-async function getWeval() {
+/**
+ * Download Weval from GitHub releases
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.downloadDir] - Directory to which the binary should be downloaded
+ * @returns {string} path to the downloaded binary on disk
+ */
+export async function getWeval(opts) {
     const knownPlatforms = {
       "win32 x64 LE": "x86_64-windows",
       "darwin arm64 LE": "aarch64-macos",
@@ -42,8 +50,9 @@ async function getWeval() {
         return resp.json();
       } catch (err) {
         const errMsg = err?.toString() ?? 'unknown error';
-        console.error(`failed to fetch JSON from URL [${url}] (status ${resp?.status}): ${errMsg}`);
-        process.exit(1);
+        const msg = `failed to fetch JSON from URL [${url}] (status ${resp?.status}): ${errMsg}`;
+        console.error(msg);
+        throw new Error(msg);
       }
     }
 
@@ -51,47 +60,38 @@ async function getWeval() {
     const assetSuffix = (platform == 'win32') ? 'zip' : 'tar.xz';
     const exeSuffix = (platform == 'win32') ? '.exe' : '';
 
-    const exeDir = join(__dirname, platformName);
-    const exe = join(exeDir, `weval${exeSuffix}`);
+    let downloadDir = opts && opts.downloadDir ? opts.downloadDir : __dirname;
+    let exeDir = join(downloadDir, platformName);
+    const exePath = join(exeDir, `weval${exeSuffix}`);
 
     // If we already have the executable installed, then return it
-    if (existsSync(exe)) {
-      return exe;
+    if (existsSync(exePath)) {
+      return exePath;
     }
 
     await mkdir(exeDir, { recursive: true });
-    let repoBaseURL = `https://api.github.com/repos/bytecodealliance/weval`;
-    let response = await getJSON(`${repoBaseURL}/releases/tags/${TAG}`);
-      let id = response.id;
-      let assets = await getJSON(`${repoBaseURL}/releases/${id}/assets`);
-      let releaseAsset = `weval-${TAG}-${platformName}.${assetSuffix}`;
-      let asset = assets.find(asset => asset.name === releaseAsset);
-      if (!asset) {
-          console.error(`Can't find an asset named ${releaseAsset}`);
-          process.exit(1);
-      }
-      let data = await fetch(asset.browser_download_url);
-      if (!data.ok) {
-          console.error(`Error downloading ${asset.browser_download_url}`);
-          process.exit(1);
-      }
-      let buf = await data.arrayBuffer();
 
-      if (releaseAsset.endsWith('.xz')) {
-          buf = await xz.decompress(new Uint8Array(buf));
-      }
-      await decompress(Buffer.from(buf), exeDir, {
-          // Remove the leading directory from the extracted file.
-          strip: 1,
-          plugins: [
-              decompressUnzip(),
-              decompressTar()
-          ],
-          // Only extract the binary file and nothing else
-          filter: file => parse(file.path).base === `weval${exeSuffix}`,
-      });
+    let releaseURL = `https://github.com/bytecodealliance/weval/releases/download/${TAG}/weval-${TAG}-${platformName}.tar.xz`;
+    let data = await fetch(releaseURL);
+    if (!data.ok) {
+        console.error(`Error downloading ${asset.browser_download_url}`);
+        process.exit(1);
+    }
+    let buf = await data.arrayBuffer();
+    buf = await xz.decompress(new Uint8Array(buf));
 
-    return exe;
+    await decompress(Buffer.from(buf), exeDir, {
+        // Remove the leading directory from the extracted file.
+        strip: 1,
+        plugins: [
+            decompressUnzip(),
+            decompressTar()
+        ],
+        // Only extract the binary file and nothing else
+        filter: file => parse(file.path).base === `weval${exeSuffix}`,
+    });
+
+    return exePath;
 }
 
 export default getWeval;
